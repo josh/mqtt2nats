@@ -25,13 +25,14 @@ const (
 
 func main() {
 	ctx := context.Background()
-	var mqttTsnetEnabled bool
 	var mqttBroker string
 	var mqttTsAuthKey string
 	var mqttTsHostname string
-	var natsTsnetEnabled bool
+	var mqttTsnetEnabled bool
+	var natsSubjectPrefix string
 	var natsTsAuthKey string
 	var natsTsHostname string
+	var natsTsnetEnabled bool
 	var natsURL string
 
 	flag.StringVar(&mqttBroker, "mqtt", "", "MQTT Broker URL (required)")
@@ -42,6 +43,7 @@ func main() {
 	flag.BoolVar(&natsTsnetEnabled, "nats-tsnet", false, "Use tsnet for NATS connection")
 	flag.StringVar(&natsTsAuthKey, "nats-ts-authkey", "", "Tailscale auth key for NATS connection")
 	flag.StringVar(&natsTsHostname, "nats-ts-hostname", defaultNATSHostname, "Tailscale hostname for NATS connection")
+	flag.StringVar(&natsSubjectPrefix, "nats-subject-prefix", "", "NATS subject prefix (optional)")
 	flag.Parse()
 
 	if mqttBroker == "" || natsURL == "" {
@@ -145,7 +147,7 @@ func main() {
 	token := client.Subscribe("#", 0, func(client mqtt.Client, msg mqtt.Message) {
 		topic := msg.Topic()
 		payload := msg.Payload()
-		natsSubject := transformTopic(topic)
+		natsSubject := transformTopic(topic, natsSubjectPrefix)
 
 		slog.Info("Relaying", "mqtt_topic", topic, "nats_subject", natsSubject)
 
@@ -199,7 +201,7 @@ func dialWithRetry(ctx context.Context, srv *tsnet.Server, network, address stri
 	return nil, err
 }
 
-func transformTopic(topic string) string {
+func transformTopic(topic, prefix string) string {
 	parts := strings.Split(topic, "/")
 	newParts := make([]string, len(parts))
 	for i, part := range parts {
@@ -209,5 +211,9 @@ func transformTopic(topic string) string {
 			newParts[i] = strings.ReplaceAll(part, ".", "//")
 		}
 	}
-	return strings.Join(newParts, ".")
+	subject := strings.Join(newParts, ".")
+	if prefix != "" {
+		return prefix + "." + subject
+	}
+	return subject
 }

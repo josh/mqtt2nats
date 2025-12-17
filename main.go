@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/nats-io/nats.go"
@@ -23,6 +24,7 @@ const (
 )
 
 func main() {
+	ctx := context.Background()
 	var mqttTsnetEnabled bool
 	var mqttBroker string
 	var mqttTsAuthKey string
@@ -70,8 +72,6 @@ func main() {
 		}
 	}
 
-	ctx := context.Background()
-
 	var natsOpts []nats.Option
 	var natsTs *tsnet.Server
 
@@ -81,9 +81,13 @@ func main() {
 			AuthKey:  natsTsAuthKey,
 			Dir:      filepath.Join(stateDir, "mqtt2nats", "nats"),
 		}
-		defer natsTs.Close()
+		defer func() {
+			if err := natsTs.Close(); err != nil {
+				slog.Error("Error closing NATS tsnet server", "error", err)
+			}
+		}()
 
-		if _, err := natsTs.Up(ctx); err != nil {
+		if err := natsTs.Start(); err != nil {
 			slog.Error("Error starting NATS tsnet server", "error", err)
 			os.Exit(1)
 		}
@@ -109,15 +113,19 @@ func main() {
 			AuthKey:  mqttTsAuthKey,
 			Dir:      filepath.Join(stateDir, "mqtt2nats", "mqtt"),
 		}
-		defer mqttTs.Close()
+		defer func() {
+			if err := mqttTs.Close(); err != nil {
+				slog.Error("Error closing MQTT tsnet server", "error", err)
+			}
+		}()
 
-		if _, err := mqttTs.Up(ctx); err != nil {
+		if err := mqttTs.Start(); err != nil {
 			slog.Error("Error starting MQTT tsnet server", "error", err)
 			os.Exit(1)
 		}
 
 		opts.SetCustomOpenConnectionFn(func(uri *url.URL, options mqtt.ClientOptions) (net.Conn, error) {
-			return mqttTs.Dial(ctx, "tcp", uri.Host)
+			return dialWithRetry(ctx, mqttTs, "tcp", uri.Host)
 		})
 	}
 
@@ -166,7 +174,29 @@ type TailscaleDialer struct {
 }
 
 func (d *TailscaleDialer) Dial(network, address string) (net.Conn, error) {
-	return d.srv.Dial(context.Background(), network, address)
+	return dialWithRetry(context.Background(), d.srv, network, address)
+}
+
+func dialWithRetry(ctx context.Context, srv *tsnet.Server, network, address string) (net.Conn, error) {
+	var conn net.Conn
+	var err error
+
+	for attempt := range 10 {
+		dialCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		conn, err = srv.Dial(dialCtx, network, address)
+		cancel()
+
+		if err == nil {
+			return conn, nil
+		}
+
+		if attempt < 9 {
+			slog.Debug("Dial failed, retrying", "attempt", attempt+1, "error", err)
+			time.Sleep(500 * time.Millisecond)
+		}
+	}
+
+	return nil, err
 }
 
 func transformTopic(topic string) string {

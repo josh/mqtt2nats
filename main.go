@@ -191,7 +191,7 @@ func dialWithRetry(ctx context.Context, srv *tsnet.Server, network, address stri
 		}
 
 		if attempt < 9 {
-			slog.Debug("Dial failed, retrying", "attempt", attempt+1, "error", err)
+			slog.Warn("Dial failed, retrying", "attempt", attempt+1, "error", err)
 			time.Sleep(500 * time.Millisecond)
 		}
 	}

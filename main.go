@@ -70,6 +70,8 @@ func main() {
 		}
 	}
 
+	ctx := context.Background()
+
 	var natsOpts []nats.Option
 	var natsTs *tsnet.Server
 
@@ -81,7 +83,7 @@ func main() {
 		}
 		defer natsTs.Close()
 
-		if err := natsTs.Start(); err != nil {
+		if _, err := natsTs.Up(ctx); err != nil {
 			slog.Error("Error starting NATS tsnet server", "error", err)
 			os.Exit(1)
 		}
@@ -109,13 +111,13 @@ func main() {
 		}
 		defer mqttTs.Close()
 
-		if err := mqttTs.Start(); err != nil {
+		if _, err := mqttTs.Up(ctx); err != nil {
 			slog.Error("Error starting MQTT tsnet server", "error", err)
 			os.Exit(1)
 		}
 
 		opts.SetCustomOpenConnectionFn(func(uri *url.URL, options mqtt.ClientOptions) (net.Conn, error) {
-			return mqttTs.Dial(context.Background(), "tcp", uri.Host)
+			return mqttTs.Dial(ctx, "tcp", uri.Host)
 		})
 	}
 

@@ -38,17 +38,20 @@ func main() {
 		os.Exit(1)
 	}
 
-	configDir, err := os.UserConfigDir()
-	if err != nil {
-		slog.Error("Error getting user config dir", "error", err)
-		os.Exit(1)
+	stateDir := os.Getenv("XDG_STATE_HOME")
+	if stateDir == "" {
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			slog.Error("Error getting user home dir", "error", err)
+			os.Exit(1)
+		}
+		stateDir = filepath.Join(homeDir, ".local", "state")
 	}
-	configDir = filepath.Join(configDir, "mqtt2nats")
 
 	natsTs := new(tsnet.Server)
 	natsTs.Hostname = natsTsHostname
 	natsTs.AuthKey = natsTsAuthKey
-	natsTs.Dir = filepath.Join(configDir, "nats")
+	natsTs.Dir = filepath.Join(stateDir, "mqtt2nats", "nats")
 	defer natsTs.Close()
 
 	if err := natsTs.Start(); err != nil {
@@ -59,7 +62,7 @@ func main() {
 	mqttTs := new(tsnet.Server)
 	mqttTs.Hostname = mqttTsHostname
 	mqttTs.AuthKey = mqttTsAuthKey
-	mqttTs.Dir = filepath.Join(configDir, "mqtt")
+	mqttTs.Dir = filepath.Join(stateDir, "mqtt2nats", "mqtt")
 	defer mqttTs.Close()
 
 	if err := mqttTs.Start(); err != nil {

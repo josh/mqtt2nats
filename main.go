@@ -97,7 +97,7 @@ func main() {
 		natsOpts = append(natsOpts, nats.SetCustomDialer(&TailscaleDialer{srv: natsTs}))
 	}
 
-	nc, err := nats.Connect(natsURL, natsOpts...)
+	nc, err := nats.Connect(natsURL, append(natsOpts, nats.NoEcho())...)
 	if err != nil {
 		slog.Error("Error connecting to NATS", "error", err)
 		os.Exit(1)

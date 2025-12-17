@@ -3,7 +3,7 @@ module github.com/josh/mqtt2nats
 go 1.25.4
 
 require (
-	github.com/eclipse/paho.mqtt.golang v1.5.1
+	github.com/eclipse/paho.golang v0.23.0
 	github.com/nats-io/nats.go v1.47.0
 	tailscale.com v1.92.0
 )

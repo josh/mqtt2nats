@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/url"
@@ -13,7 +15,8 @@ import (
 	"syscall"
 	"time"
 
-	mqtt "github.com/eclipse/paho.mqtt.golang"
+	"github.com/eclipse/paho.golang/autopaho"
+	"github.com/eclipse/paho.golang/paho"
 	"github.com/nats-io/nats.go"
 	"tailscale.com/tsnet"
 )
@@ -23,65 +26,111 @@ const (
 	defaultNATSHostname = "mqtt2nats-nats"
 )
 
-func main() {
-	ctx := context.Background()
-	var mqttBroker string
-	var mqttTsAuthKey string
-	var mqttTsHostname string
-	var mqttTsnetEnabled bool
-	var natsSubjectPrefix string
-	var natsTsAuthKey string
-	var natsTsHostname string
-	var natsTsnetEnabled bool
-	var natsURL string
+type Config struct {
+	mqttBroker        *url.URL
+	mqttTsnetEnabled  bool
+	mqttTsAuthKey     string
+	mqttTsHostname    string
+	natsURL           string
+	natsTsnetEnabled  bool
+	natsTsAuthKey     string
+	natsTsHostname    string
+	natsSubjectPrefix string
+	stateDir          string
+	verbose           bool
+}
 
+func parseFlags() (*Config, error) {
+	cfg := &Config{}
+
+	var mqttBroker string
+	var stateDir string
 	flag.StringVar(&mqttBroker, "mqtt", "", "MQTT Broker URL (required)")
-	flag.BoolVar(&mqttTsnetEnabled, "mqtt-tsnet", false, "Use tsnet for MQTT connection")
-	flag.StringVar(&mqttTsAuthKey, "mqtt-ts-authkey", "", "Tailscale auth key for MQTT connection")
-	flag.StringVar(&mqttTsHostname, "mqtt-ts-hostname", defaultMQTTHostname, "Tailscale hostname for MQTT connection")
-	flag.StringVar(&natsURL, "nats", "", "NATS Server URL (required)")
-	flag.BoolVar(&natsTsnetEnabled, "nats-tsnet", false, "Use tsnet for NATS connection")
-	flag.StringVar(&natsTsAuthKey, "nats-ts-authkey", "", "Tailscale auth key for NATS connection")
-	flag.StringVar(&natsTsHostname, "nats-ts-hostname", defaultNATSHostname, "Tailscale hostname for NATS connection")
-	flag.StringVar(&natsSubjectPrefix, "nats-subject-prefix", "", "NATS subject prefix (optional)")
+	flag.BoolVar(&cfg.mqttTsnetEnabled, "mqtt-tsnet", false, "Use tsnet for MQTT connection")
+	flag.StringVar(&cfg.mqttTsAuthKey, "mqtt-ts-authkey", "", "Tailscale auth key for MQTT connection")
+	flag.StringVar(&cfg.mqttTsHostname, "mqtt-ts-hostname", defaultMQTTHostname, "Tailscale hostname for MQTT connection")
+	flag.StringVar(&cfg.natsURL, "nats", "", "NATS Server URL (required)")
+	flag.BoolVar(&cfg.natsTsnetEnabled, "nats-tsnet", false, "Use tsnet for NATS connection")
+	flag.StringVar(&cfg.natsTsAuthKey, "nats-ts-authkey", "", "Tailscale auth key for NATS connection")
+	flag.StringVar(&cfg.natsTsHostname, "nats-ts-hostname", defaultNATSHostname, "Tailscale hostname for NATS connection")
+	flag.StringVar(&cfg.natsSubjectPrefix, "nats-subject-prefix", "", "NATS subject prefix (optional)")
+	flag.StringVar(&stateDir, "state-dir", "", "State directory for tsnet (optional, defaults to XDG_STATE_HOME or ~/.local/state)")
+	flag.BoolVar(&cfg.verbose, "verbose", false, "Enable debug logging")
 	flag.Parse()
 
-	if mqttBroker == "" || natsURL == "" {
+	if mqttBroker == "" || cfg.natsURL == "" {
 		flag.Usage()
-		os.Exit(1)
+		return nil, flag.ErrHelp
 	}
 
-	if !mqttTsnetEnabled && (mqttTsAuthKey != "" || mqttTsHostname != defaultMQTTHostname) {
-		slog.Error("MQTT tsnet flags provided without -mqtt-tsnet enabled")
-		os.Exit(1)
+	mqttBrokerURL, err := url.Parse(mqttBroker)
+	if err != nil {
+		return nil, err
+	}
+	cfg.mqttBroker = mqttBrokerURL
+
+	if !cfg.mqttTsnetEnabled && (cfg.mqttTsAuthKey != "" || cfg.mqttTsHostname != defaultMQTTHostname) {
+		return nil, errors.New("MQTT tsnet flags provided without -mqtt-tsnet enabled")
 	}
 
-	if !natsTsnetEnabled && (natsTsAuthKey != "" || natsTsHostname != defaultNATSHostname) {
-		slog.Error("NATS tsnet flags provided without -nats-tsnet enabled")
-		os.Exit(1)
+	if !cfg.natsTsnetEnabled && (cfg.natsTsAuthKey != "" || cfg.natsTsHostname != defaultNATSHostname) {
+		return nil, errors.New("NATS tsnet flags provided without -nats-tsnet enabled")
 	}
 
-	var stateDir string
-	if mqttTsnetEnabled || natsTsnetEnabled {
-		stateDir = os.Getenv("XDG_STATE_HOME")
+	if cfg.mqttTsnetEnabled || cfg.natsTsnetEnabled {
 		if stateDir == "" {
-			homeDir, err := os.UserHomeDir()
-			if err != nil {
-				slog.Error("Error getting user home dir", "error", err)
-				os.Exit(1)
+			stateDir = os.Getenv("XDG_STATE_HOME")
+			if stateDir == "" {
+				homeDir, err := os.UserHomeDir()
+				if err != nil {
+					return nil, fmt.Errorf("error getting user home dir: %w", err)
+				}
+				stateDir = filepath.Join(homeDir, ".local", "state")
 			}
-			stateDir = filepath.Join(homeDir, ".local", "state")
 		}
+		cfg.stateDir = stateDir
 	}
 
-	var natsOpts []nats.Option
-	var natsTs *tsnet.Server
+	return cfg, nil
+}
 
-	if natsTsnetEnabled {
+func main() {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	cfg, err := parseFlags()
+	if err != nil {
+		if err == flag.ErrHelp {
+			flag.Usage()
+		} else {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			flag.Usage()
+		}
+		os.Exit(1)
+	}
+
+	if cfg.verbose {
+		slog.SetLogLoggerLevel(slog.LevelDebug)
+	}
+
+	var natsTs *tsnet.Server
+	var nc *nats.Conn
+
+	natsOpts := []nats.Option{
+		nats.NoEcho(),
+		nats.RetryOnFailedConnect(true),
+		nats.MaxReconnects(-1),
+		nats.ReconnectWait(time.Second),
+		nats.ReconnectHandler(func(nc *nats.Conn) {
+			slog.Info("NATS reconnected", "url", cfg.natsURL)
+		}),
+	}
+
+	if cfg.natsTsnetEnabled {
 		natsTs = &tsnet.Server{
-			Hostname: natsTsHostname,
-			AuthKey:  natsTsAuthKey,
-			Dir:      filepath.Join(stateDir, "mqtt2nats", "nats"),
+			Hostname: cfg.natsTsHostname,
+			AuthKey:  cfg.natsTsAuthKey,
+			Dir:      filepath.Join(cfg.stateDir, "mqtt2nats", "nats"),
 		}
 		defer func() {
 			if err := natsTs.Close(); err != nil {
@@ -97,23 +146,12 @@ func main() {
 		natsOpts = append(natsOpts, nats.SetCustomDialer(&TailscaleDialer{srv: natsTs}))
 	}
 
-	nc, err := nats.Connect(natsURL, append(natsOpts, nats.NoEcho())...)
-	if err != nil {
-		slog.Error("Error connecting to NATS", "error", err)
-		os.Exit(1)
-	}
-	defer nc.Close()
-	slog.Info("Connected to NATS", "url", natsURL)
-
-	opts := mqtt.NewClientOptions()
-	opts.AddBroker(mqttBroker)
-	opts.SetClientID("mqtt2nats-relay")
-
-	if mqttTsnetEnabled {
-		mqttTs := &tsnet.Server{
-			Hostname: mqttTsHostname,
-			AuthKey:  mqttTsAuthKey,
-			Dir:      filepath.Join(stateDir, "mqtt2nats", "mqtt"),
+	var mqttTs *tsnet.Server
+	if cfg.mqttTsnetEnabled {
+		mqttTs = &tsnet.Server{
+			Hostname: cfg.mqttTsHostname,
+			AuthKey:  cfg.mqttTsAuthKey,
+			Dir:      filepath.Join(cfg.stateDir, "mqtt2nats", "mqtt"),
 		}
 		defer func() {
 			if err := mqttTs.Close(); err != nil {
@@ -125,50 +163,108 @@ func main() {
 			slog.Error("Error starting MQTT tsnet server", "error", err)
 			os.Exit(1)
 		}
-
-		opts.SetCustomOpenConnectionFn(func(uri *url.URL, options mqtt.ClientOptions) (net.Conn, error) {
-			return dialWithRetry(ctx, mqttTs, "tcp", uri.Host)
-		})
 	}
 
-	opts.SetOnConnectHandler(func(client mqtt.Client) {
-		slog.Info("Connected to MQTT", "broker", mqttBroker)
-	})
-	opts.SetConnectionLostHandler(func(client mqtt.Client, err error) {
-		slog.Error("Connection lost to MQTT", "error", err)
-	})
+	clientConfig := paho.ClientConfig{
+		ClientID: "mqtt2nats-relay",
+		Router:   paho.NewStandardRouter(),
+		OnPublishReceived: []func(paho.PublishReceived) (bool, error){
+			func(pr paho.PublishReceived) (bool, error) {
+				topic := pr.Packet.Topic
+				payload := pr.Packet.Payload
+				natsSubject := transformTopic(topic, cfg.natsSubjectPrefix)
 
-	client := mqtt.NewClient(opts)
-	if token := client.Connect(); token.Wait() && token.Error() != nil {
-		slog.Error("Error connecting to MQTT", "error", token.Error())
-		os.Exit(1)
+				slog.Debug("Relaying message", "mqtt_topic", topic, "nats_subject", natsSubject, "payload_size", len(payload))
+
+				if err := nc.Publish(natsSubject, payload); err != nil {
+					slog.Error("Error publishing to NATS", "error", err, "nats_subject", natsSubject)
+				}
+				return true, nil
+			},
+		},
+		OnClientError: func(err error) {
+			slog.Error("MQTT client error", "error", err)
+		},
+		OnServerDisconnect: func(d *paho.Disconnect) {
+			if d.Properties != nil && d.Properties.ReasonString != "" {
+				slog.Warn("Server requested disconnect", "reason", d.Properties.ReasonString, "reason_code", d.ReasonCode)
+			} else {
+				slog.Warn("Server requested disconnect", "reason_code", d.ReasonCode)
+			}
+		},
 	}
 
-	token := client.Subscribe("#", 0, func(client mqtt.Client, msg mqtt.Message) {
-		topic := msg.Topic()
-		payload := msg.Payload()
-		natsSubject := transformTopic(topic, natsSubjectPrefix)
+	autopahoConfig := autopaho.ClientConfig{
+		ServerUrls:            []*url.URL{cfg.mqttBroker},
+		KeepAlive:             60,
+		ConnectTimeout:        30 * time.Second,
+		ConnectRetryDelay:     0,
+		SessionExpiryInterval: 300,
+		OnConnectionUp: func(cm *autopaho.ConnectionManager, connAck *paho.Connack) {
+			slog.Info("MQTT connection established", "broker", cfg.mqttBroker.String())
+			if connAck.Properties != nil {
+				if connAck.Properties.ServerKeepAlive != nil {
+					slog.Info("Server keepalive", "keepalive", *connAck.Properties.ServerKeepAlive)
+				}
+				if connAck.Properties.SessionExpiryInterval != nil {
+					slog.Info("Session expiry interval", "interval", *connAck.Properties.SessionExpiryInterval)
+				}
+			}
+			_, err := cm.Subscribe(ctx, &paho.Subscribe{
+				Subscriptions: []paho.SubscribeOptions{
+					{Topic: "#", QoS: 0, NoLocal: true},
+				},
+			})
+			if err != nil {
+				slog.Error("Failed to subscribe to MQTT topic", "topic", "#", "error", err)
+			} else {
+				slog.Info("Subscribed to MQTT topic", "topic", "#")
+			}
+		},
+		OnConnectionDown: func() bool {
+			slog.Warn("MQTT connection lost, will reconnect")
+			return true
+		},
+		OnConnectError: func(err error) {
+			slog.Error("Error whilst attempting MQTT connection", "error", err)
+		},
+		ClientConfig: clientConfig,
+	}
 
-		slog.Info("Relaying", "mqtt_topic", topic, "nats_subject", natsSubject)
-
-		if err := nc.Publish(natsSubject, payload); err != nil {
-			slog.Error("Error publishing to NATS", "error", err)
+	if cfg.mqttTsnetEnabled {
+		autopahoConfig.AttemptConnection = func(ctx context.Context, acfg autopaho.ClientConfig, uri *url.URL) (net.Conn, error) {
+			return mqttTs.Dial(ctx, "tcp", uri.Host)
 		}
-	})
+	}
 
-	if token.Wait() && token.Error() != nil {
-		slog.Error("Error subscribing to MQTT topic", "topic", "#", "error", token.Error())
+	nc, err = nats.Connect(cfg.natsURL, natsOpts...)
+	if err != nil {
+		slog.Error("Error connecting to NATS", "error", err)
 		os.Exit(1)
 	}
-	slog.Info("Subscribed to MQTT topic", "topic", "#")
+	defer nc.Close()
+	slog.Info("Connected to NATS", "url", cfg.natsURL)
 
-	c := make(chan os.Signal, 1)
-	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
-	<-c
+	cm, err := autopaho.NewConnection(ctx, autopahoConfig)
+	if err != nil {
+		slog.Error("Error creating MQTT connection manager", "error", err)
+		os.Exit(1)
+	}
 
-	slog.Info("Shutting down...")
-	client.Disconnect(250)
-	slog.Info("Exited.")
+	if err := cm.AwaitConnection(ctx); err != nil {
+		slog.Error("Error awaiting MQTT connection", "error", err)
+		os.Exit(1)
+	}
+
+	slog.Info("MQTT connection manager started, waiting for shutdown signal")
+	<-ctx.Done()
+
+	slog.Info("Shutdown signal received, disconnecting...")
+	if err := cm.Disconnect(ctx); err != nil {
+		slog.Error("Error disconnecting from MQTT", "error", err)
+	}
+	<-cm.Done()
+	slog.Info("Shutdown complete")
 }
 
 type TailscaleDialer struct {
@@ -176,29 +272,7 @@ type TailscaleDialer struct {
 }
 
 func (d *TailscaleDialer) Dial(network, address string) (net.Conn, error) {
-	return dialWithRetry(context.Background(), d.srv, network, address)
-}
-
-func dialWithRetry(ctx context.Context, srv *tsnet.Server, network, address string) (net.Conn, error) {
-	var conn net.Conn
-	var err error
-
-	for attempt := range 10 {
-		dialCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		conn, err = srv.Dial(dialCtx, network, address)
-		cancel()
-
-		if err == nil {
-			return conn, nil
-		}
-
-		if attempt < 9 {
-			slog.Warn("Dial failed, retrying", "attempt", attempt+1, "error", err)
-			time.Sleep(500 * time.Millisecond)
-		}
-	}
-
-	return nil, err
+	return d.srv.Dial(context.Background(), network, address)
 }
 
 func transformTopic(topic, prefix string) string {

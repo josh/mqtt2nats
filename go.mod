@@ -1,6 +1,6 @@
 module github.com/josh/mqtt2nats
 
-go 1.25.4
+go 1.25.5
 
 require (
 	github.com/eclipse/paho.golang v0.23.0

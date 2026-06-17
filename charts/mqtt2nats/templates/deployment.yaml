@@ -1,0 +1,112 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "mqtt2nats.fullname" . }}
+  labels:
+    {{- include "mqtt2nats.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "mqtt2nats.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include "mqtt2nats.configJson" . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "mqtt2nats.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "mqtt2nats.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: mqtt2nats
+          image: {{ include "mqtt2nats.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - -config
+            - /etc/mqtt2nats/config.json
+          ports:
+            - name: http
+              containerPort: {{ include "mqtt2nats.httpPort" . }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/mqtt2nats/config.json
+              subPath: config.json
+              readOnly: true
+            {{- if include "mqtt2nats.hasSecrets" . }}
+            - name: secrets
+              mountPath: /etc/mqtt2nats/secrets
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "mqtt2nats.fullname" . }}
+        {{- if include "mqtt2nats.hasSecrets" . }}
+        - name: secrets
+          projected:
+            defaultMode: 0400
+            sources:
+              {{- if .Values.secrets.mqtt.password.secret.name }}
+              - secret:
+                  name: {{ .Values.secrets.mqtt.password.secret.name | quote }}
+                  items:
+                    - key: {{ .Values.secrets.mqtt.password.key }}
+                      path: mqtt.password
+              {{- end }}
+              {{- $method := include "mqtt2nats.natsMethod" . | trim }}
+              {{- if eq $method "creds" }}
+              - secret:
+                  name: {{ .Values.secrets.nats.creds.secret.name | quote }}
+                  items:
+                    - key: {{ .Values.secrets.nats.creds.key }}
+                      path: nats.creds
+              {{- else if eq $method "token" }}
+              - secret:
+                  name: {{ .Values.secrets.nats.token.secret.name | quote }}
+                  items:
+                    - key: {{ .Values.secrets.nats.token.key }}
+                      path: nats.token
+              {{- else if eq $method "user" }}
+              - secret:
+                  name: {{ .Values.secrets.nats.user.secret.name | quote }}
+                  items:
+                    - key: {{ .Values.secrets.nats.user.userKey }}
+                      path: nats.user
+                    - key: {{ .Values.secrets.nats.user.passwordKey }}
+                      path: nats.password
+              {{- end }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

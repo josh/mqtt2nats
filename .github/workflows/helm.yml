@@ -1,0 +1,37 @@
+name: Helm
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Install Helm
+        run: |
+          curl --fail --silent --show-error --location --output get-helm.sh https://raw.githubusercontent.com/helm/helm/5ae85868d45ca7bb9ac3ef7a10e0db54b8a8695c/scripts/get-helm-4
+          bash get-helm.sh --version "v${HELM_VERSION}"
+        env:
+          HELM_VERSION: "4.1.0"
+
+      - name: Lint chart
+        run: helm lint ./charts/mqtt2nats
+
+      - name: Template chart
+        run: helm template test ./charts/mqtt2nats
+
+      - name: Template chart with NATS user auth
+        run: |
+          helm template test ./charts/mqtt2nats \
+            --set secrets.nats.user.secret.name=creds \
+            --set secrets.nats.user.userKey=user \
+            --set secrets.nats.user.passwordKey=password
+
+      - name: Template chart with MQTT password
+        run: |
+          helm template test ./charts/mqtt2nats \
+            --set secrets.mqtt.password.secret.name=mqtt \
+            --set secrets.mqtt.password.key=password

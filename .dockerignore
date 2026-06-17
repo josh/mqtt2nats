@@ -1,0 +1,7 @@
+.git/
+.github/
+charts/
+research/
+*.md
+mqtt2nats
+mqtt2nats.json

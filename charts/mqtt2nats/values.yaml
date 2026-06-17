@@ -1,0 +1,86 @@
+image:
+  repository: ghcr.io/josh/mqtt2nats
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# The bridge is single-instance for v1 (full QoS 0/1/2 with a persistent MQTT
+# session). Do not scale beyond 1 replica until shared-subscription HA lands.
+replicaCount: 1
+
+# Application config. Maps 1:1 to mqtt2nats's config.json schema. The chart
+# injects the auth file paths (mqtt.password_file, nats.*_file) at template time
+# from the `secrets` block below — do not set them here.
+config:
+  mqtt:
+    broker_url: "tls://broker:8883"
+    client_id: "mqtt2nats"
+    username: ""
+    topic_filter: "#"
+    session_expiry: "24h"
+    keepalive: "30s"
+  nats:
+    url: "nats://nats:4222"
+  http_addr: ":8080"
+
+# Kubernetes Secrets consumed by the chart. Create them yourself (sealed-secrets,
+# External Secrets, sops, kubectl, ...); the chart only references them, mounts
+# the keys to files under /etc/mqtt2nats/secrets, and injects the matching
+# *_file path into config.json. Leave a block's secret.name empty to skip it.
+secrets:
+  # MQTT password (optional). -> config.mqtt.password_file
+  mqtt:
+    password:
+      secret:
+        name: ""
+      key: password
+
+  # NATS auth (optional). Populate exactly ONE method block to authenticate.
+  nats:
+    creds: # -> nats.creds_file
+      secret:
+        name: ""
+      key: nats.creds
+    token: # -> nats.token_file
+      secret:
+        name: ""
+      key: token
+    user: # -> nats.user_file + nats.password_file
+      secret:
+        name: ""
+      userKey: user
+      passwordKey: password
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65534
+  runAsGroup: 65534
+  fsGroup: 65534
+  fsGroupChangePolicy: OnRootMismatch
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    memory: 128Mi
+
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}

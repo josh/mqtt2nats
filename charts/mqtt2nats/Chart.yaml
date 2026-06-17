@@ -2,8 +2,8 @@ apiVersion: v2
 name: mqtt2nats
 description: Bidirectional NATS <-> MQTT 5.0 bridge
 type: application
-version: "0.0.1"
-appVersion: "0.0.1"
+version: "0.0.2"
+appVersion: "0.0.2"
 kubeVersion: ">=1.25.0-0"
 home: https://github.com/josh/mqtt2nats
 sources:

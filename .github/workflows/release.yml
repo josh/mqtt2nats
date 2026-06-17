@@ -109,7 +109,8 @@ jobs:
 
       - name: Create manifest list and push
         run: |
+          version="${GITHUB_REF_NAME#v}"
           docker buildx imagetools create \
-            --tag ${{ env.IMAGE }}:${{ github.ref_name }} \
+            --tag ${{ env.IMAGE }}:"${version}" \
             --tag ${{ env.IMAGE }}:latest \
             ${{ steps.digests.outputs.sources }}

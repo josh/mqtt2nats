@@ -52,6 +52,44 @@ secrets:
       userKey: user
       passwordKey: password
 
+# Pod NetworkPolicies, split by direction so each can be enabled independently.
+# Both are off by default, so upgrading an existing release changes nothing.
+#
+# Enabling a direction makes it an allowlist — there is no permit-everything
+# mode, because a policy that allows every peer still punches through a
+# namespace-wide default deny for these pods.
+networkPolicy:
+  ingress:
+    # The bridge serves only /healthz and /readyz, and the chart renders no
+    # Service. Enabling this with `from` empty therefore renders a deny-all
+    # policy, which is the usual configuration. Kubelet probes are node-local
+    # traffic that most CNIs exempt from pod policy — worth confirming against
+    # yours, because a blocked liveness probe restarts the pod.
+    enabled: false
+    # NetworkPolicyPeer entries allowed to reach the http port; set this only if
+    # something scrapes the health endpoints.
+    from: []
+  egress:
+    # Creates an egress policy for the bridge pods. DNS is always included:
+    # neither the broker nor NATS can be resolved without it.
+    enabled: false
+    # NetworkPolicyPeer entries limiting where DNS may be sent. Empty leaves the
+    # rule destination-agnostic, so it works with CoreDNS, kube-dns, and
+    # node-local DNS without assuming cluster-specific labels or addresses.
+    dnsTo: []
+    # Egress to config.mqtt.broker_url. NetworkPolicy is L3/L4-only and cannot
+    # resolve a URL, so name the peers yourself. The port must match the scheme
+    # in that URL: 8883 for tls://, 1883 for mqtt://.
+    mqtt:
+      to: []
+      port: 8883
+    # Egress to config.nats.url; port must match the one in that URL.
+    nats:
+      to: []
+      port: 4222
+    # Complete NetworkPolicyEgressRule entries for any other destination.
+    extraRules: []
+
 serviceAccount:
   create: true
   name: ""

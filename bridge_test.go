@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"net/url"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -370,4 +371,65 @@ func subscribeMQTT(t *testing.T, cm *autopaho.ConnectionManager, filter string) 
 	}); err != nil {
 		t.Fatalf("mqtt subscribe %q: %v", filter, err)
 	}
+}
+
+func TestMQTTToNATS_QoS1_StoreRetriesUntilStreamReturns(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+	live, err := env.nc.SubscribeSync("outage.a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream, err := env.js.Stream(ctx, msgsStreamName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	full := stream.CachedInfo().Config
+	full.MaxBytes = 1
+	full.Discard = jetstream.DiscardNew
+	if _, err := env.js.UpdateStream(ctx, full); err != nil {
+		t.Fatal(err)
+	}
+
+	pub := env.mqttClient(t, "pubOutage", nil)
+	env.publishMQTT(t, pub, "outage/a", 1, false, "a")
+	if _, err := live.NextMsg(5 * time.Second); err != nil {
+		t.Fatalf("live copy not published: %v", err)
+	}
+	time.Sleep(time.Second)
+
+	if err := env.bridge.ensureStreams(ctx); err != nil {
+		t.Fatal(err)
+	}
+	env.publishMQTT(t, pub, "outage/b", 1, false, "b")
+
+	eventually(t, 10*time.Second, func() bool {
+		_, errA := stream.GetLastMsgForSubject(ctx, msgsSubjectPrefix+"outage.a")
+		_, errB := stream.GetLastMsgForSubject(ctx, msgsSubjectPrefix+"outage.b")
+		return errA == nil && errB == nil
+	}, "message published during the outage was never stored")
+
+	info, err := stream.Info(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.State.Msgs != 2 {
+		t.Errorf("msgs stream has %d messages, want 2", info.State.Msgs)
+	}
+}
+
+func TestMQTTToNATS_QoS1_OversizedDoesNotBlock(t *testing.T) {
+	env := newTestEnv(t)
+	pub := env.mqttClient(t, "pubBig", nil)
+	env.publishMQTT(t, pub, "big/a", 1, false, strings.Repeat("x", int(env.nc.MaxPayload())+1))
+	env.publishMQTT(t, pub, "big/b", 1, false, "b")
+
+	stream, err := env.js.Stream(context.Background(), msgsStreamName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, 5*time.Second, func() bool {
+		m, err := stream.GetLastMsgForSubject(context.Background(), msgsSubjectPrefix+"big.b")
+		return err == nil && string(m.Data) == "b"
+	}, "message after an oversized one was never stored")
 }

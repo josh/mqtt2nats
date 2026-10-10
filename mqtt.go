@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -99,9 +100,6 @@ func (b *Bridge) handleMQTT(pr paho.PublishReceived) (bool, error) {
 		return true, nil // cannot represent in NATS; drop
 	}
 
-	ctx, cancel := context.WithTimeout(b.ctx, opTimeout)
-	defer cancel()
-
 	// Live copy: publish to the natural subject for core NATS subscribers.
 	live := nats.NewMsg(subject)
 	live.Data = p.Payload
@@ -126,13 +124,16 @@ func (b *Bridge) handleMQTT(pr paho.PublishReceived) (bool, error) {
 			opts = append(opts, jetstream.WithMsgID(
 				fmt.Sprintf("%s-%d", b.cfg.MQTT.ClientID, p.PacketID)))
 		}
-		if _, err := b.js.PublishMsg(ctx, dm, opts...); err != nil {
-			b.log.Warn("mqtt->nats durable store failed", "subject", subject, "err", err)
-			return false, err // do NOT ack: the broker will redeliver
+		if err := b.storeDurable(dm, opts); errors.Is(err, nats.ErrMaxPayload) {
+			b.log.Warn("drop oversized mqtt message", "topic", p.Topic, "err", err)
+		} else if err != nil {
+			return false, err
 		}
 	}
 
 	if p.Retain && retainedEnabled {
+		ctx, cancel := context.WithTimeout(b.ctx, opTimeout)
+		defer cancel()
 		b.storeRetained(ctx, subject, p.Payload)
 	}
 
@@ -143,4 +144,21 @@ func (b *Bridge) handleMQTT(pr paho.PublishReceived) (bool, error) {
 		}
 	}
 	return true, nil
+}
+
+func (b *Bridge) storeDurable(m *nats.Msg, opts []jetstream.PublishOpt) error {
+	for {
+		ctx, cancel := context.WithTimeout(b.ctx, opTimeout)
+		_, err := b.js.PublishMsg(ctx, m, opts...)
+		cancel()
+		if err == nil || errors.Is(err, nats.ErrMaxPayload) {
+			return err
+		}
+		b.log.Warn("mqtt->nats durable store failed, retrying", "subject", m.Subject, "err", err)
+		select {
+		case <-b.ctx.Done():
+			return b.ctx.Err()
+		case <-time.After(time.Second):
+		}
+	}
 }

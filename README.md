@@ -92,6 +92,12 @@ never inline. Example `mqtt2nats.json`:
 Only `mqtt.broker_url` and `nats.url` are required. NATS auth is one of
 `creds_file`, `token_file`, or `user_file`+`password_file`.
 
+`nats.stream_replicas` sets the replica count of the bridge's JetStream streams.
+Leave it unset on a standalone server (the server default, 1); set it to `3` on
+a JetStream cluster so the streams survive the loss of a node. The bridge
+applies it on every start, scaling existing streams in place, so removing the
+setting or rolling back to an older release scales them back down to 1.
+
 `http_addr` serves Kubernetes probes: `/healthz` (liveness — up while the
 process is alive) and `/readyz` (readiness — up only when both connections are).
 

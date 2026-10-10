@@ -101,6 +101,7 @@ func (b *Bridge) ensureStreams(ctx context.Context) error {
 		MaxAge:      streamMaxAge,
 		MaxBytes:    streamMaxBytes,
 		Duplicates:  dedupWindow,
+		Replicas:    b.cfg.NATS.StreamReplicas,
 	})
 	if err != nil {
 		return fmt.Errorf("msgs stream: %w", err)
@@ -115,6 +116,7 @@ func (b *Bridge) ensureStreams(ctx context.Context) error {
 			Storage:           jetstream.FileStorage,
 			Retention:         jetstream.LimitsPolicy,
 			MaxMsgsPerSubject: 1,
+			Replicas:          b.cfg.NATS.StreamReplicas,
 		})
 		if err != nil {
 			return fmt.Errorf("rmsgs stream: %w", err)

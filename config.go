@@ -37,6 +37,8 @@ type NATSConfig struct {
 	TokenFile    string `json:"token_file"`
 	UserFile     string `json:"user_file"`
 	PasswordFile string `json:"password_file"`
+
+	StreamReplicas int `json:"stream_replicas"`
 }
 
 // defaultConfig returns the baseline config that JSON overrides are merged on

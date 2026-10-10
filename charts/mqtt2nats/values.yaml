@@ -22,6 +22,9 @@ config:
     keepalive: "30s"
   nats:
     url: "nats://nats:4222"
+    # Replica count for the bridge's JetStream streams, applied on every start.
+    # Unset uses the server default (1); set 3 on a JetStream cluster.
+    # stream_replicas: 3
   http_addr: ":8080"
 
 # Kubernetes Secrets consumed by the chart. Create them yourself (sealed-secrets,

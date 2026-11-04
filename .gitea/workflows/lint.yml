@@ -4,9 +4,12 @@ on:
   push:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   go-version:
-    runs-on: ubuntu-slim
+    runs-on: ubuntu-amd64
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -22,7 +25,10 @@ jobs:
           [[ "$(printf '%s\n' "$required" "$available" | sort -V | tail -n 1)" == "$available" ]]
 
   golangci:
-    runs-on: ubuntu-slim
+    runs-on: ubuntu-amd64
+    env:
+      # renovate: datasource=github-releases depName=golangci/golangci-lint extractVersion=^v(?<version>.+)$
+      GOLANGCI_LINT_VERSION: "2.12.2"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -31,9 +37,10 @@ jobs:
           go-version-file: go.mod
 
       - name: Vet
-        run: go vet ./...
+        run: |
+          go vet ./...
 
       - name: golangci-lint
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
-          version: v2.12.2
+          version: v${{ env.GOLANGCI_LINT_VERSION }}

@@ -56,7 +56,10 @@ func newTestEnv(t *testing.T) *testEnv {
 	t.Cleanup(func() {
 		cancel()
 		select {
-		case <-errCh:
+		case err := <-errCh:
+			if err != nil {
+				t.Errorf("bridge run: %v", err)
+			}
 		case <-time.After(15 * time.Second):
 			t.Error("bridge did not shut down in time")
 		}

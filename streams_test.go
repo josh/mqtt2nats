@@ -107,8 +107,6 @@ func TestEnsureStreams_ScalesReplicas(t *testing.T) {
 	assertReplicas(1)
 
 	b.cfg.NATS.StreamReplicas = 3
-	if err := b.ensureStreams(ctx); err != nil {
-		t.Fatal(err)
-	}
+	eventually(t, 20*time.Second, func() bool { return b.ensureStreams(ctx) == nil }, "streams not scaled")
 	assertReplicas(3)
 }

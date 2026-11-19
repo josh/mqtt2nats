@@ -6,7 +6,7 @@ require (
 	github.com/eclipse/paho.golang v0.23.0
 	github.com/mochi-mqtt/server/v2 v2.7.9
 	github.com/nats-io/nats-server/v2 v2.15.3
-	github.com/nats-io/nats.go v1.55.0
+	github.com/nats-io/nats.go v1.56.0
 )
 
 require (
